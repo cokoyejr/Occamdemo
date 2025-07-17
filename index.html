@@ -273,6 +273,10 @@
             background: #0f1419;
         }
         
+        .btn.secondary {
+            background: var(--secondary-color);
+        }
+        
         .btn-group {
             display: flex;
             gap: 0.5rem;
@@ -343,10 +347,10 @@
                 </div>
                 
                 <div id="network">
-                    <div class="loading">
-                        <i class="fas fa-upload" style="font-size: 2rem;"></i>
-                        <h3>Upload BOM CSV to Begin</h3>
-                        <p>Expected: System | Equipment | Subcomponent | Quantity (100MW)</p>
+                    <div class="loading" id="networkLoading">
+                        <i class="fas fa-cog fa-spin" style="font-size: 2rem;"></i>
+                        <h3>Loading Demo Data...</h3>
+                        <p>Building PEM Electrolyzer network from sample BOM</p>
                     </div>
                 </div>
             </div>
@@ -403,9 +407,28 @@
                     </div>
                 </div>
                 
-                <!-- Communities -->
+                <!-- Visualization Mode -->
                 <div class="panel-section">
-                    <h3><i class="fas fa-layer-group"></i> Communities</h3>
+                    <h3><i class="fas fa-palette"></i> Visualization Mode</h3>
+                    <div class="control-group">
+                        <label class="control-label">Color Scheme</label>
+                        <div class="btn-group">
+                            <button class="btn" id="riskModeBtn" onclick="setColorMode('risk')" style="background: var(--success-color);">
+                                <i class="fas fa-thermometer-half"></i> Risk Heat Map
+                            </button>
+                            <button class="btn secondary" id="communityModeBtn" onclick="setColorMode('community')">
+                                <i class="fas fa-layer-group"></i> Communities
+                            </button>
+                        </div>
+                        <div id="colorLegend" style="margin-top: 1rem;">
+                            <!-- Risk legend will be populated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Communities -->
+                <div class="panel-section" id="communitySection">
+                    <h3><i class="fas fa-layer-group"></i> System Communities</h3>
                     <div id="communityLegend"></div>
                 </div>
                 
@@ -416,6 +439,7 @@
                         <button class="btn" onclick="togglePhysics()">Toggle Physics</button>
                         <button class="btn" onclick="fitToView()">Fit View</button>
                         <button class="btn" onclick="resetView()">Reset</button>
+                        <button class="btn" onclick="clearData()">Clear Data</button>
                     </div>
                 </div>
             </div>
@@ -436,8 +460,202 @@
         const palette = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00",
                         "#ffff33", "#a65628", "#f781bf", "#999999", "#66c2a5"];
         
+        // Global color mode setting
+        let colorMode = 'risk'; // 'risk' or 'community'
+        
+        function getRiskHeatmapColor(risk) {
+            // Create a smooth gradient from green (low) to red (high)
+            if (risk < 5) return '#10b981';      // Green
+            if (risk < 8) return '#34d399';      // Light green
+            if (risk < 12) return '#fbbf24';     // Yellow
+            if (risk < 16) return '#fb923c';     // Orange
+            if (risk < 20) return '#f87171';     // Light red
+            return '#ef4444';                    // Red
+        }
+        
+        function getNodeColor(node) {
+            if (colorMode === 'risk') {
+                return {
+                    background: getRiskHeatmapColor(node.risk),
+                    border: darkenColor(getRiskHeatmapColor(node.risk), 0.3),
+                    highlight: {
+                        background: lightenColor(getRiskHeatmapColor(node.risk), 0.2),
+                        border: darkenColor(getRiskHeatmapColor(node.risk), 0.3)
+                    }
+                };
+            } else {
+                return {
+                    background: palette[node.community % palette.length],
+                    border: getRiskBorderColor(node.risk),
+                    highlight: {
+                        background: lightenColor(palette[node.community % palette.length], 0.3),
+                        border: getRiskBorderColor(node.risk)
+                    }
+                };
+            }
+        }
+        
+        function darkenColor(color, percent) {
+            const num = parseInt(color.replace("#", ""), 16);
+            const amt = Math.round(2.55 * percent * 100);
+            const R = Math.max((num >> 16) - amt, 0);
+            const G = Math.max((num >> 8 & 0x00FF) - amt, 0);
+            const B = Math.max((num & 0x0000FF) - amt, 0);
+            return "#" + (0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1);
+        }
+        
+        function lightenColor(color, percent) {
+            const num = parseInt(color.replace("#", ""), 16);
+            const amt = Math.round(2.55 * percent * 100);
+            const R = (num >> 16) + amt;
+            const G = (num >> 8 & 0x00FF) + amt;
+            const B = (num & 0x0000FF) + amt;
+            return "#" + (0x1000000 + (R < 255 ? R < 1 ? 0 : R : 255) * 0x10000 + 
+                (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 + 
+                (B < 255 ? B < 1 ? 0 : B : 255)).toString(16).slice(1);
+        }
+        
         function meanOverrun(C, M, S) {
             return 5.8 * Math.pow(C, 1.26) * Math.pow(1 - M, 1.18) * Math.pow(S, -1.34);
+        }
+
+        function getRiskBorderColor(risk) {
+            if (risk < 10) return '#059669';
+            if (risk < 20) return '#d97706';
+            return '#dc2626';
+        }
+        
+        function getRiskLevel(risk) {
+            if (risk < 10) return 'low';
+            if (risk < 20) return 'medium';
+            return 'high';
+        }
+        
+        // Demo BOM data embedded directly
+        const demoBOMData = [
+            {"System": "Water Purification", "Equipment": "Raw Water Pretreatment Unit", "Subcomponent": "Multimedia/Carbon Filter Vessel", "Quantity (100MW)": 2},
+            {"System": "Water Purification", "Equipment": "Reverse Osmosis Skid", "Subcomponent": "RO Membrane Train", "Quantity (100MW)": 4},
+            {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "Mixed-Bed Ion Exchange Module", "Quantity (100MW)": 2},
+            {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "UV Sterilizer Lamp Assembly", "Quantity (100MW)": 4},
+            {"System": "Water Purification", "Equipment": "DI Water Storage", "Subcomponent": "Ultrapure Water Tank (≈50 m³)", "Quantity (100MW)": 1},
+            {"System": "Water Purification", "Equipment": "DI Water Feed Pumps", "Subcomponent": "Centrifugal Feed Pump", "Quantity (100MW)": 2},
+            {"System": "Water Purification", "Equipment": "Instrumentation", "Subcomponent": "Ultrapure Water Flow Meter", "Quantity (100MW)": 4},
+            
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "PEM Cell Stack Assembly", "Quantity (100MW)": 20},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Water Recirculation Pump", "Quantity (100MW)": 40},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Hydrogen Gas–Liquid Separator", "Quantity (100MW)": 20},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Oxygen Gas–Liquid Separator", "Quantity (100MW)": 20},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Internal Manifold & Piping Set", "Quantity (100MW)": 20},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Module Instrumentation Package", "Quantity (100MW)": 20},
+            
+            {"System": "Power Supply", "Equipment": "Main Transformer", "Subcomponent": "Step‑Down Transformer (HV‑>MV)", "Quantity (100MW)": 2},
+            {"System": "Power Supply", "Equipment": "MV Switchgear", "Subcomponent": "Switchgear Feeder Panel", "Quantity (100MW)": 4},
+            {"System": "Power Supply", "Equipment": "Rectifier Unit", "Subcomponent": "5 MW Rectifier Cabinet", "Quantity (100MW)": 20},
+            {"System": "Power Supply", "Equipment": "Harmonic Filter / PFC", "Subcomponent": "Filter Reactor–Capacitor Bank", "Quantity (100MW)": 4},
+            {"System": "Power Supply", "Equipment": "Auxiliary MCC", "Subcomponent": "Motor Control Center Section", "Quantity (100MW)": 2},
+            
+            {"System": "Cooling", "Equipment": "Plate Heat Exchanger", "Subcomponent": "DI Water–Coolant HX", "Quantity (100MW)": 20},
+            {"System": "Cooling", "Equipment": "Circulation Pump Set", "Subcomponent": "Coolant Circulation Pump", "Quantity (100MW)": 40},
+            {"System": "Cooling", "Equipment": "Air‑Cooled Radiator Bank", "Subcomponent": "Dry Cooler Module", "Quantity (100MW)": 10},
+            {"System": "Cooling", "Equipment": "Expansion System", "Subcomponent": "Coolant Expansion / Degas Tank", "Quantity (100MW)": 2},
+            {"System": "Cooling", "Equipment": "Evaporative Cooling Tower (optional)", "Subcomponent": "Cooling Tower Cell", "Quantity (100MW)": 4},
+            
+            {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas Cooling Heat Exchanger", "Quantity (100MW)": 2},
+            {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas–Liquid Knockout Drum", "Quantity (100MW)": 2},
+            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Twin‑Tower Hydrogen Dryer", "Quantity (100MW)": 2},
+            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Final Particulate Filter", "Quantity (100MW)": 4},
+            {"System": "Hydrogen Drying", "Equipment": "Product Buffer", "Subcomponent": "Hydrogen Surge Vessel", "Quantity (100MW)": 2},
+            {"System": "Hydrogen Drying", "Equipment": "O₂ Vent System", "Subcomponent": "Oxygen Vent Manifold Assembly", "Quantity (100MW)": 1},
+            
+            {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Hydrogen Vent Stack with Flame Arrestor", "Quantity (100MW)": 2},
+            {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Oxygen Vent Stack", "Quantity (100MW)": 2},
+            {"System": "Safety & Control", "Equipment": "Isolation Valves", "Subcomponent": "Emergency Shutdown (ESD) Valve", "Quantity (100MW)": 8},
+            {"System": "Safety & Control", "Equipment": "Pressure Relief", "Subcomponent": "Relief Valve / Burst Disc", "Quantity (100MW)": 12},
+            {"System": "Safety & Control", "Equipment": "Gas Detection", "Subcomponent": "Hydrogen Leak Detector", "Quantity (100MW)": 10},
+            {"System": "Safety & Control", "Equipment": "Ventilation", "Subcomponent": "Explosion‑Proof Ventilation Fan", "Quantity (100MW)": 4},
+            {"System": "Safety & Control", "Equipment": "Fire & Gas Detection", "Subcomponent": "Flame / Smoke Detector", "Quantity (100MW)": 8},
+            {"System": "Safety & Control", "Equipment": "Nitrogen Purge", "Subcomponent": "N₂ Purge Manifold & Cylinders", "Quantity (100MW)": 2},
+            {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Central PLC / SCADA Cabinet", "Quantity (100MW)": 1},
+            {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Local Skid PLC Panel", "Quantity (100MW)": 20},
+            {"System": "Safety & Control", "Equipment": "Instrumentation", "Subcomponent": "Process Transmitters & Analyzers", "Quantity (100MW)": 40}
+        ];
+        
+        // Auto-load demo data on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Page loaded, starting demo data load...');
+            setTimeout(() => {
+                loadDemoData();
+            }, 500);
+        });
+        
+        function loadDemoData() {
+            console.log('Loading demo data...');
+            updateUploadStatus('Loading demo PEM Electrolyzer BOM data...', 'info');
+            
+            try {
+                bomDataFromCSV = demoBOMData;
+                console.log('BOM data set:', bomDataFromCSV.length, 'rows');
+                
+                buildTreeFromBOM();
+                console.log('Tree structure built');
+                
+                const loadingDiv = document.getElementById('networkLoading');
+                if (loadingDiv) {
+                    loadingDiv.style.display = 'none';
+                }
+                
+                rebuildNetworkFromBOM();
+                console.log('Network rebuilt');
+                
+                updateUploadStatus('✓ Demo BOM loaded: PEM Electrolyzer (100MW) with 40 components', 'success');
+                
+                const subtitle = document.querySelector('.network-subtitle');
+                if (subtitle) {
+                    subtitle.textContent = 'Explore the interactive demo or upload your own BOM data';
+                }
+                
+                setTimeout(() => {
+                    try {
+                        setColorMode('risk');
+                        console.log('Risk mode set');
+                    } catch (colorError) {
+                        console.error('Color mode error:', colorError);
+                    }
+                }, 500);
+                
+            } catch (error) {
+                console.error('Error loading demo data:', error);
+                updateUploadStatus('Error loading demo data. Please try uploading a CSV file.', 'error');
+            }
+        }
+        
+        function clearData() {
+            bomDataFromCSV = null;
+            treeStructure = null;
+            originalData = null;
+            
+            if (network && typeof network.destroy === 'function') {
+                network.destroy();
+                network = null;
+                nodes = null;
+                edges = null;
+            }
+            
+            document.getElementById('network').innerHTML = `
+                <div class="loading">
+                    <i class="fas fa-upload" style="font-size: 2rem;"></i>
+                    <h3>Network Cleared</h3>
+                    <p>Upload a CSV file or reload demo data to continue</p>
+                </div>
+            `;
+            
+            document.getElementById('nodeCount').textContent = '0';
+            document.getElementById('edgeCount').textContent = '0';
+            document.getElementById('communityCount').textContent = '0';
+            document.getElementById('modularityQ').textContent = '0.00';
+            document.getElementById('communityLegend').innerHTML = '';
+            
+            updateUploadStatus('Network cleared. Upload CSV or reload demo data.', 'info');
         }
         
         async function handleCSVUpload() {
@@ -522,7 +740,7 @@
             });
             
             treeStructure = { root, sys_nodes, equip_nodes };
-            updateUploadStatus(`Tree structure built successfully`, 'success');
+            updateUploadStatus('Tree structure built successfully', 'success');
         }
         
         function buildNetworkXGraph() {
@@ -613,6 +831,8 @@
         }
         
         function rebuildNetworkFromBOM() {
+            console.log('Starting rebuildNetworkFromBOM...');
+            
             if (!bomDataFromCSV || bomDataFromCSV.length === 0) {
                 updateUploadStatus('No BOM data available', 'error');
                 return;
@@ -638,10 +858,7 @@
                     label: node.name,
                     originalName: node.name,
                     originalId: node.id,
-                    color: {
-                        background: palette[node.community % palette.length],
-                        border: getRiskBorderColor(node.risk)
-                    },
+                    color: getNodeColor(node),
                     size: 15 + (node.centrality * 30),
                     title: createBOMTooltip(node),
                     community: node.community,
@@ -683,18 +900,23 @@
             
             originalData = { nodes: formattedNodes, edges: formattedEdges };
             
-            if (network) {
-                nodes.clear();
-                edges.clear();
-                nodes.add(formattedNodes);
-                edges.add(formattedEdges);
-            } else {
-                initializeNetworkWithData(formattedNodes, formattedEdges);
+            const networkContainer = document.getElementById('network');
+            networkContainer.innerHTML = '';
+            
+            if (network && typeof network.destroy === 'function') {
+                network.destroy();
+                network = null;
+                nodes = null;
+                edges = null;
             }
+            
+            initializeNetworkWithData(formattedNodes, formattedEdges);
             
             updateNetworkStats();
             createCommunityLegend();
             updateUploadStatus(`✓ Network built: ${formattedNodes.length} nodes, ${formattedEdges.length} edges`, 'success');
+            
+            console.log('Network initialization complete');
         }
         
         function initializeNetworkWithData(nodeData, edgeData) {
@@ -795,16 +1017,9 @@
                 left: ${position.x + 20}px;
                 top: ${position.y - 50}px;
                 pointer-events: none;
-                animation: popupFadeIn 0.2s ease-out;
             `;
             
             popup.innerHTML = `
-                <style>
-                    @keyframes popupFadeIn {
-                        from { opacity: 0; transform: translateY(-10px) scale(0.95); }
-                        to { opacity: 1; transform: translateY(0) scale(1); }
-                    }
-                </style>
                 <div style="border-bottom: 2px solid #3498db; padding-bottom: 12px; margin-bottom: 15px;">
                     <h4 style="margin: 0; color: #1E242C; font-size: 1.1rem; font-weight: 600;">
                         ${nodeData.label}
@@ -814,53 +1029,30 @@
                 <div style="margin: 12px 0;">
                     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                         <strong style="color: #64748b; font-size: 0.9rem;">Community:</strong> 
-                        <span style="background: ${palette[nodeData.community % palette.length]}; color: white; padding: 4px 8px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <span style="background: ${palette[nodeData.community % palette.length]}; color: white; padding: 4px 8px; border-radius: 6px; font-size: 0.85rem; font-weight: 600;">
                             ${nodeData.community}
                         </span>
                     </div>
                     
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                         <strong style="color: #64748b; font-size: 0.9rem;">Centrality:</strong> 
-                        <div style="display: flex; align-items: center; gap: 5px;">
-                            <span style="color: #3498db; font-weight: 700; font-size: 1rem;">${(nodeData.centrality || 0).toFixed(3)}</span>
-                            <span style="font-size: 0.75rem; color: #94a3b8; background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">importance</span>
-                        </div>
+                        <span style="color: #3498db; font-weight: 700; font-size: 1rem;">${(nodeData.centrality || 0).toFixed(3)}</span>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <strong style="color: #64748b; font-size: 0.9rem;">Risk Score:</strong> 
+                        <span style="color: ${getRiskBorderColor(nodeData.risk)}; font-weight: 700; font-size: 1rem;">${(nodeData.risk || 0).toFixed(1)}</span>
                     </div>
                 </div>
                 
-                <div style="background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); padding: 15px; border-radius: 10px; margin: 15px 0; border: 1px solid #e2e8f0;">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
-                        <strong style="color: #1E242C; font-size: 0.95rem;">Risk Analysis:</strong>
-                        <span style="background: ${getRiskBorderColor(nodeData.risk)}; color: white; padding: 3px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; text-transform: uppercase; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                            ${riskLevel}
-                        </span>
-                    </div>
-                    
-                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                        <div style="background: #e2e8f0; height: 8px; border-radius: 4px; flex: 1; overflow: hidden;">
-                            <div style="height: 100%; background: linear-gradient(90deg, ${getRiskBorderColor(nodeData.risk)}, ${lightenColor(getRiskBorderColor(nodeData.risk), 0.3)}); width: ${Math.min(100, (nodeData.risk / 30) * 100)}%; border-radius: 4px; transition: width 0.3s ease;"></div>
-                        </div>
-                        <span style="font-weight: 700; color: ${getRiskBorderColor(nodeData.risk)}; font-size: 0.9rem;">
-                            ${(nodeData.risk || 0).toFixed(1)}/30
-                        </span>
-                    </div>
-                    
-                    <div style="font-size: 0.8rem; color: #64748b; line-height: 1.4;">
-                        ${riskDescription}
-                    </div>
-                </div>
-                
-                <div style="border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 15px;">
-                    <div style="display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #94a3b8;">
-                        <span style="background: #3498db; color: white; padding: 2px 4px; border-radius: 3px;">💡</span>
-                        <span>Double-click to zoom • Click to highlight connections</span>
-                    </div>
+                <div style="font-size: 0.8rem; color: #64748b;">
+                    ${riskDescription}
                 </div>
             `;
             
             document.body.appendChild(popup);
             
-            // Smart positioning to keep popup on screen
+            // Smart positioning
             const rect = popup.getBoundingClientRect();
             if (rect.right > window.innerWidth - 20) {
                 popup.style.left = (position.x - rect.width - 20) + 'px';
@@ -868,21 +1060,15 @@
             if (rect.bottom > window.innerHeight - 20) {
                 popup.style.top = (position.y - rect.height + 20) + 'px';
             }
-            if (rect.left < 20) {
-                popup.style.left = '20px';
-            }
-            if (rect.top < 20) {
-                popup.style.top = '20px';
-            }
         }
         
         function getRiskDescription(riskScore, riskLevel) {
             if (riskLevel === 'low') {
-                return "• Low complexity component<br>• Well-isolated system<br>• Minimal impact on overall project";
+                return "Low complexity component with minimal project impact.";
             } else if (riskLevel === 'medium') {
-                return "• Moderate complexity<br>• Some system interdependencies<br>• Monitor for cost overruns";
+                return "Moderate complexity with some system interdependencies.";
             } else {
-                return "• High complexity component<br>• Critical system dependencies<br>• High probability of cost overruns<br>• Requires close monitoring";
+                return "High complexity component requiring close monitoring.";
             }
         }
         
@@ -923,6 +1109,70 @@
                         </div>
                     </div>
                 </div>
+            `;
+        }
+        
+        function setColorMode(mode) {
+            colorMode = mode;
+            
+            const riskBtn = document.getElementById('riskModeBtn');
+            const communityBtn = document.getElementById('communityModeBtn');
+            
+            if (mode === 'risk') {
+                riskBtn.style.background = 'var(--success-color)';
+                riskBtn.classList.remove('secondary');
+                communityBtn.style.background = '';
+                communityBtn.classList.add('secondary');
+                
+                createRiskLegend();
+                document.getElementById('communitySection').style.display = 'none';
+                
+            } else {
+                communityBtn.style.background = 'var(--success-color)';
+                communityBtn.classList.remove('secondary');
+                riskBtn.style.background = '';
+                riskBtn.classList.add('secondary');
+                
+                document.getElementById('colorLegend').innerHTML = '';
+                document.getElementById('communitySection').style.display = 'block';
+            }
+            
+            if (originalData && originalData.nodes) {
+                const updatedNodes = originalData.nodes.map(node => ({
+                    ...node,
+                    color: getNodeColor(node)
+                }));
+                
+                if (nodes) {
+                    nodes.update(updatedNodes);
+                }
+                
+                if (mode === 'community') {
+                    createCommunityLegend();
+                }
+            }
+        }
+        
+        function createRiskLegend() {
+            const riskRanges = [
+                { min: 0, max: 5, color: '#10b981', label: 'Very Low Risk (0-5)' },
+                { min: 5, max: 8, color: '#34d399', label: 'Low Risk (5-8)' },
+                { min: 8, max: 12, color: '#fbbf24', label: 'Medium Risk (8-12)' },
+                { min: 12, max: 16, color: '#fb923c', label: 'High Risk (12-16)' },
+                { min: 16, max: 20, color: '#f87171', label: 'Very High Risk (16-20)' },
+                { min: 20, max: 30, color: '#ef4444', label: 'Critical Risk (20+)' }
+            ];
+            
+            const legendHTML = riskRanges.map(range => `
+                <div class="legend-item" style="margin: 0.25rem 0;">
+                    <div class="legend-color" style="background-color: ${range.color}; width: 20px; height: 12px; border-radius: 3px;"></div>
+                    <div style="font-size: 0.8rem; color: var(--text-primary);">${range.label}</div>
+                </div>
+            `).join('');
+            
+            document.getElementById('colorLegend').innerHTML = `
+                <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">Risk Heat Map Legend:</div>
+                ${legendHTML}
             `;
         }
         
@@ -993,29 +1243,6 @@
             statusElement.textContent = message;
             statusElement.style.color = type === 'error' ? '#dc2626' : 
                                       type === 'success' ? '#059669' : '#64748b';
-        }
-        
-        function getRiskBorderColor(risk) {
-            if (risk < 10) return '#059669';
-            if (risk < 20) return '#d97706';
-            return '#dc2626';
-        }
-        
-        function getRiskLevel(risk) {
-            if (risk < 10) return 'low';
-            if (risk < 20) return 'medium';
-            return 'high';
-        }
-        
-        function lightenColor(color, percent) {
-            const num = parseInt(color.replace("#", ""), 16);
-            const amt = Math.round(2.55 * percent * 100);
-            const R = (num >> 16) + amt;
-            const G = (num >> 8 & 0x00FF) + amt;
-            const B = (num & 0x0000FF) + amt;
-            return "#" + (0x1000000 + (R < 255 ? R < 1 ? 0 : R : 255) * 0x10000 + 
-                (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 + 
-                (B < 255 ? B < 1 ? 0 : B : 255)).toString(16).slice(1);
         }
         
         function updateNetworkStats() {
@@ -1091,14 +1318,6 @@
             const panel = document.getElementById('controlsPanel');
             panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
         }
-        
-        // Initialize on page load
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(() => {
-                // Empty initialization - wait for CSV upload
-                console.log('PEM Electrolyzer Network Analysis ready');
-            }, 100);
-        });
     </script>
 </body>
 </html>
