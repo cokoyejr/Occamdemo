@@ -343,14 +343,14 @@
                         <i class="fas fa-network-wired"></i>
                         Interactive Network Visualization
                     </h2>
-                    <p class="network-subtitle">Upload your BOM CSV file to begin analysis</p>
+                    <p class="network-subtitle">EML-based risk analysis with process flow edges</p>
                 </div>
                 
                 <div id="network">
                     <div class="loading" id="networkLoading">
                         <i class="fas fa-cog fa-spin" style="font-size: 2rem;"></i>
                         <h3>Loading Demo Data...</h3>
-                        <p>Building PEM Electrolyzer network from sample BOM</p>
+                        <p>Building PEM Electrolyzer network with EML calculations</p>
                     </div>
                 </div>
             </div>
@@ -362,7 +362,7 @@
                     <div class="upload-area" onclick="document.getElementById('csvFileInput').click()">
                         <i class="fas fa-cloud-upload-alt" style="font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--text-secondary);"></i>
                         <div>Click to upload CSV</div>
-                        <small>PEM_PFD_subcomponents_qty_100MW.csv</small>
+                        <small>BOM with Severity_$ and Likelihood_py columns</small>
                     </div>
                     <input type="file" id="csvFileInput" accept=".csv" onchange="handleCSVUpload()" class="file-input">
                     <div id="uploadStatus" class="upload-status"></div>
@@ -402,7 +402,7 @@
                     <h3><i class="fas fa-info-circle"></i> Component Details</h3>
                     <div id="nodeDetailsContent">
                         <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">
-                            Click on a component to see details
+                            Click on a component to see EML details
                         </p>
                     </div>
                 </div>
@@ -414,14 +414,14 @@
                         <label class="control-label">Color Scheme</label>
                         <div class="btn-group">
                             <button class="btn" id="riskModeBtn" onclick="setColorMode('risk')" style="background: var(--success-color);">
-                                <i class="fas fa-thermometer-half"></i> Risk Heat Map
+                                <i class="fas fa-thermometer-half"></i> EML Heat Map
                             </button>
                             <button class="btn secondary" id="communityModeBtn" onclick="setColorMode('community')">
                                 <i class="fas fa-layer-group"></i> Communities
                             </button>
                         </div>
                         <div id="colorLegend" style="margin-top: 1rem;">
-                            <!-- Risk legend will be populated here -->
+                            <!-- EML legend will be populated here -->
                         </div>
                     </div>
                 </div>
@@ -463,14 +463,51 @@
         // Global color mode setting
         let colorMode = 'risk'; // 'risk' or 'community'
         
-        function getRiskHeatmapColor(risk) {
-            // Create a smooth gradient from green (low) to red (high)
-            if (risk < 5) return '#10b981';      // Green
-            if (risk < 8) return '#34d399';      // Light green
-            if (risk < 12) return '#fbbf24';     // Yellow
-            if (risk < 16) return '#fb923c';     // Orange
-            if (risk < 20) return '#f87171';     // Light red
-            return '#ef4444';                    // Red
+        // PROCESS-FLOW EDGES (dashed lines)
+        const processFlows = [
+            // Raw-water treatment → ultrapure feed
+            ["Feed Water Pump", "Multimedia/Carbon Filter Vessel"],
+            ["Multimedia/Carbon Filter Vessel", "RO Membrane Train"],
+            ["RO Membrane Train", "Mixed-Bed Ion Exchange Module"],
+            ["Mixed-Bed Ion Exchange Module", "Ultrapure Water Tank (≈50 m³)"],
+            ["Ultrapure Water Tank (≈50 m³)", "Centrifugal Feed Pump"],
+            // electrolyzer loop (anode side)
+            ["Centrifugal Feed Pump", "PEM Cell Stack Assembly"],
+            ["PEM Cell Stack Assembly", "Oxygen Gas–Liquid Separator"],
+            ["Oxygen Gas–Liquid Separator", "Demister"],            // if added
+            ["Demister", "Oxygen Vent Manifold Assembly"],
+            // electrolyzer loop (cathode side)
+            ["PEM Cell Stack Assembly", "Hydrogen Gas–Liquid Separator"],
+            ["Hydrogen Gas–Liquid Separator", "Gas Cooling Heat Exchanger"],
+            ["Gas Cooling Heat Exchanger", "Gas–Liquid Knockout Drum"],
+            ["Gas–Liquid Knockout Drum", "Twin-Tower Hydrogen Dryer"],
+            ["Twin-Tower Hydrogen Dryer", "Final Particulate Filter"],
+            ["Final Particulate Filter", "Hydrogen Surge Vessel"],
+            // purification branch
+            ["Hydrogen Surge Vessel", "O₂/H₂ Recombiner"],      // catalytic bed
+            ["O₂/H₂ Recombiner", "Pressure-Swing Adsorption Unit"],
+            ["Pressure-Swing Adsorption Unit", "Electric Heater"],
+            ["Electric Heater", "Chiller"],
+            // cooling circuit
+            ["Plate Heat Exchanger", "Coolant Circulation Pump"],
+            ["Coolant Circulation Pump", "Dry Cooler Module"],
+            ["Dry Cooler Module", "Coolant Expansion / Degas Tank"],
+            // power supply
+            ["Step-Down Transformer (HV->MV)", "Switchgear Feeder Panel"],
+            ["Switchgear Feeder Panel", "5 MW Rectifier Cabinet"],
+            ["5 MW Rectifier Cabinet", "PEM Cell Stack Assembly"],
+            // safety/control vents
+            ["Hydrogen Surge Vessel", "Hydrogen Vent Stack with Flame Arrestor"],
+            ["Oxygen Vent Manifold Assembly", "Oxygen Vent Stack"]
+        ];
+        
+        // New EML-based risk color function (based on 1-10 EML score)
+        function getRiskHeatmapColor(eml) {
+            const emlScore = getEMLScore(eml);
+            if (emlScore <= 3) return '#10b981';     // Green for EML 1-3
+            if (emlScore <= 5) return '#fbbf24';     // Yellow for EML 4-5
+            if (emlScore <= 7) return '#fb923c';     // Orange for EML 6-7
+            return '#ef4444';                        // Red for EML 8-10
         }
         
         function getNodeColor(node) {
@@ -519,112 +556,78 @@
             return 5.8 * Math.pow(C, 1.26) * Math.pow(1 - M, 1.18) * Math.pow(S, -1.34);
         }
 
+        // Fallback severity estimation based on node properties
+        function severity_baseGuess(node) {
+            // Simple heuristic for demo - in real use, this would be more sophisticated
+            const baseAmount = 50000; // $50k base
+            const quantityMultiplier = (node.quantity || 1) * 1000;
+            const systemMultiplier = node.system === "Power Supply" ? 3 : 
+                                   node.system === "Electrolyzer Module" ? 2.5 : 
+                                   node.system === "Safety & Control" ? 2 : 1;
+            return baseAmount + quantityMultiplier * systemMultiplier;
+        }
+
         function getRiskBorderColor(risk) {
-            if (risk < 10) return '#059669';
-            if (risk < 20) return '#d97706';
+            if (risk < 10000) return '#059669';
+            if (risk < 100000) return '#d97706';
             return '#dc2626';
         }
         
         function getRiskLevel(risk) {
-            if (risk < 10) return 'low';
-            if (risk < 20) return 'medium';
+            if (risk < 10000) return 'low';
+            if (risk < 100000) return 'medium';
             return 'high';
         }
         
-        // Demo BOM data embedded directly
+        // Demo BOM data with severity and likelihood
         const demoBOMData = [
-            {"System": "Water Purification", "Equipment": "Raw Water Pretreatment Unit", "Subcomponent": "Multimedia/Carbon Filter Vessel", "Quantity (100MW)": 2},
-            {"System": "Water Purification", "Equipment": "Reverse Osmosis Skid", "Subcomponent": "RO Membrane Train", "Quantity (100MW)": 4},
-            {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "Mixed-Bed Ion Exchange Module", "Quantity (100MW)": 2},
-            {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "UV Sterilizer Lamp Assembly", "Quantity (100MW)": 4},
-            {"System": "Water Purification", "Equipment": "DI Water Storage", "Subcomponent": "Ultrapure Water Tank (≈50 m³)", "Quantity (100MW)": 1},
-            {"System": "Water Purification", "Equipment": "DI Water Feed Pumps", "Subcomponent": "Centrifugal Feed Pump", "Quantity (100MW)": 2},
-            {"System": "Water Purification", "Equipment": "Instrumentation", "Subcomponent": "Ultrapure Water Flow Meter", "Quantity (100MW)": 4},
+            {"System": "Water Purification", "Equipment": "Raw Water Pretreatment Unit", "Subcomponent": "Multimedia/Carbon Filter Vessel", "Quantity (100MW)": 2, "Severity_$": 27000, "Likelihood_py": 0.33},
+            {"System": "Water Purification", "Equipment": "Reverse Osmosis Skid", "Subcomponent": "RO Membrane Train", "Quantity (100MW)": 4, "Severity_$": 45000, "Likelihood_py": 0.25},
+            {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "Mixed-Bed Ion Exchange Module", "Quantity (100MW)": 2, "Severity_$": 32000, "Likelihood_py": 0.18},
+            {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "UV Sterilizer Lamp Assembly", "Quantity (100MW)": 4, "Severity_$": 8500, "Likelihood_py": 0.45},
+            {"System": "Water Purification", "Equipment": "DI Water Storage", "Subcomponent": "Ultrapure Water Tank (≈50 m³)", "Quantity (100MW)": 1, "Severity_$": 125000, "Likelihood_py": 0.08},
+            {"System": "Water Purification", "Equipment": "DI Water Feed Pumps", "Subcomponent": "Centrifugal Feed Pump", "Quantity (100MW)": 2, "Severity_$": 18000, "Likelihood_py": 0.35},
+            {"System": "Water Purification", "Equipment": "Instrumentation", "Subcomponent": "Ultrapure Water Flow Meter", "Quantity (100MW)": 4, "Severity_$": 12000, "Likelihood_py": 0.22},
             
-            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "PEM Cell Stack Assembly", "Quantity (100MW)": 20},
-            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Water Recirculation Pump", "Quantity (100MW)": 40},
-            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Hydrogen Gas–Liquid Separator", "Quantity (100MW)": 20},
-            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Oxygen Gas–Liquid Separator", "Quantity (100MW)": 20},
-            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Internal Manifold & Piping Set", "Quantity (100MW)": 20},
-            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Module Instrumentation Package", "Quantity (100MW)": 20},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "PEM Cell Stack Assembly", "Quantity (100MW)": 20, "Severity_$": 5800000, "Likelihood_py": 0.12},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Water Recirculation Pump", "Quantity (100MW)": 40, "Severity_$": 25000, "Likelihood_py": 0.28},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Hydrogen Gas–Liquid Separator", "Quantity (100MW)": 20, "Severity_$": 65000, "Likelihood_py": 0.15},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Oxygen Gas–Liquid Separator", "Quantity (100MW)": 20, "Severity_$": 58000, "Likelihood_py": 0.16},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Internal Manifold & Piping Set", "Quantity (100MW)": 20, "Severity_$": 85000, "Likelihood_py": 0.20},
+            {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Module Instrumentation Package", "Quantity (100MW)": 20, "Severity_$": 45000, "Likelihood_py": 0.25},
             
-            {"System": "Power Supply", "Equipment": "Main Transformer", "Subcomponent": "Step‑Down Transformer (HV‑>MV)", "Quantity (100MW)": 2},
-            {"System": "Power Supply", "Equipment": "MV Switchgear", "Subcomponent": "Switchgear Feeder Panel", "Quantity (100MW)": 4},
-            {"System": "Power Supply", "Equipment": "Rectifier Unit", "Subcomponent": "5 MW Rectifier Cabinet", "Quantity (100MW)": 20},
-            {"System": "Power Supply", "Equipment": "Harmonic Filter / PFC", "Subcomponent": "Filter Reactor–Capacitor Bank", "Quantity (100MW)": 4},
-            {"System": "Power Supply", "Equipment": "Auxiliary MCC", "Subcomponent": "Motor Control Center Section", "Quantity (100MW)": 2},
+            {"System": "Power Supply", "Equipment": "Main Transformer", "Subcomponent": "Step‑Down Transformer (HV‑>MV)", "Quantity (100MW)": 2, "Severity_$": 850000, "Likelihood_py": 0.06},
+            {"System": "Power Supply", "Equipment": "MV Switchgear", "Subcomponent": "Switchgear Feeder Panel", "Quantity (100MW)": 4, "Severity_$": 125000, "Likelihood_py": 0.14},
+            {"System": "Power Supply", "Equipment": "Rectifier Unit", "Subcomponent": "5 MW Rectifier Cabinet", "Quantity (100MW)": 20, "Severity_$": 280000, "Likelihood_py": 0.18},
+            {"System": "Power Supply", "Equipment": "Harmonic Filter / PFC", "Subcomponent": "Filter Reactor–Capacitor Bank", "Quantity (100MW)": 4, "Severity_$": 95000, "Likelihood_py": 0.22},
+            {"System": "Power Supply", "Equipment": "Auxiliary MCC", "Subcomponent": "Motor Control Center Section", "Quantity (100MW)": 2, "Severity_$": 75000, "Likelihood_py": 0.16},
             
-            {"System": "Cooling", "Equipment": "Plate Heat Exchanger", "Subcomponent": "DI Water–Coolant HX", "Quantity (100MW)": 20},
-            {"System": "Cooling", "Equipment": "Circulation Pump Set", "Subcomponent": "Coolant Circulation Pump", "Quantity (100MW)": 40},
-            {"System": "Cooling", "Equipment": "Air‑Cooled Radiator Bank", "Subcomponent": "Dry Cooler Module", "Quantity (100MW)": 10},
-            {"System": "Cooling", "Equipment": "Expansion System", "Subcomponent": "Coolant Expansion / Degas Tank", "Quantity (100MW)": 2},
-            {"System": "Cooling", "Equipment": "Evaporative Cooling Tower (optional)", "Subcomponent": "Cooling Tower Cell", "Quantity (100MW)": 4},
+            {"System": "Cooling", "Equipment": "Plate Heat Exchanger", "Subcomponent": "DI Water–Coolant HX", "Quantity (100MW)": 20, "Severity_$": 35000, "Likelihood_py": 0.28},
+            {"System": "Cooling", "Equipment": "Circulation Pump Set", "Subcomponent": "Coolant Circulation Pump", "Quantity (100MW)": 40, "Severity_$": 22000, "Likelihood_py": 0.32},
+            {"System": "Cooling", "Equipment": "Air‑Cooled Radiator Bank", "Subcomponent": "Dry Cooler Module", "Quantity (100MW)": 10, "Severity_$": 45000, "Likelihood_py": 0.24},
+            {"System": "Cooling", "Equipment": "Expansion System", "Subcomponent": "Coolant Expansion / Degas Tank", "Quantity (100MW)": 2, "Severity_$": 28000, "Likelihood_py": 0.19},
+            {"System": "Cooling", "Equipment": "Evaporative Cooling Tower (optional)", "Subcomponent": "Cooling Tower Cell", "Quantity (100MW)": 4, "Severity_$": 85000, "Likelihood_py": 0.12},
             
-            {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas Cooling Heat Exchanger", "Quantity (100MW)": 2},
-            {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas–Liquid Knockout Drum", "Quantity (100MW)": 2},
-            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Twin‑Tower Hydrogen Dryer", "Quantity (100MW)": 2},
-            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Final Particulate Filter", "Quantity (100MW)": 4},
-            {"System": "Hydrogen Drying", "Equipment": "Product Buffer", "Subcomponent": "Hydrogen Surge Vessel", "Quantity (100MW)": 2},
-            {"System": "Hydrogen Drying", "Equipment": "O₂ Vent System", "Subcomponent": "Oxygen Vent Manifold Assembly", "Quantity (100MW)": 1},
+            {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas Cooling Heat Exchanger", "Quantity (100MW)": 2, "Severity_$": 42000, "Likelihood_py": 0.26},
+            {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas–Liquid Knockout Drum", "Quantity (100MW)": 2, "Severity_$": 38000, "Likelihood_py": 0.21},
+            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Twin‑Tower Hydrogen Dryer", "Quantity (100MW)": 2, "Severity_$": 165000, "Likelihood_py": 0.15},
+            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Final Particulate Filter", "Quantity (100MW)": 4, "Severity_$": 15000, "Likelihood_py": 0.38},
+            {"System": "Hydrogen Drying", "Equipment": "Product Buffer", "Subcomponent": "Hydrogen Surge Vessel", "Quantity (100MW)": 2, "Severity_$": 195000, "Likelihood_py": 0.09},
+            {"System": "Hydrogen Drying", "Equipment": "O₂ Vent System", "Subcomponent": "Oxygen Vent Manifold Assembly", "Quantity (100MW)": 1, "Severity_$": 25000, "Likelihood_py": 0.30},
             
-            {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Hydrogen Vent Stack with Flame Arrestor", "Quantity (100MW)": 2},
-            {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Oxygen Vent Stack", "Quantity (100MW)": 2},
-            {"System": "Safety & Control", "Equipment": "Isolation Valves", "Subcomponent": "Emergency Shutdown (ESD) Valve", "Quantity (100MW)": 8},
-            {"System": "Safety & Control", "Equipment": "Pressure Relief", "Subcomponent": "Relief Valve / Burst Disc", "Quantity (100MW)": 12},
-            {"System": "Safety & Control", "Equipment": "Gas Detection", "Subcomponent": "Hydrogen Leak Detector", "Quantity (100MW)": 10},
-            {"System": "Safety & Control", "Equipment": "Ventilation", "Subcomponent": "Explosion‑Proof Ventilation Fan", "Quantity (100MW)": 4},
-            {"System": "Safety & Control", "Equipment": "Fire & Gas Detection", "Subcomponent": "Flame / Smoke Detector", "Quantity (100MW)": 8},
-            {"System": "Safety & Control", "Equipment": "Nitrogen Purge", "Subcomponent": "N₂ Purge Manifold & Cylinders", "Quantity (100MW)": 2},
-            {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Central PLC / SCADA Cabinet", "Quantity (100MW)": 1},
-            {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Local Skid PLC Panel", "Quantity (100MW)": 20},
-            {"System": "Safety & Control", "Equipment": "Instrumentation", "Subcomponent": "Process Transmitters & Analyzers", "Quantity (100MW)": 40}
+            {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Hydrogen Vent Stack with Flame Arrestor", "Quantity (100MW)": 2, "Severity_$": 85000, "Likelihood_py": 0.08},
+            {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Oxygen Vent Stack", "Quantity (100MW)": 2, "Severity_$": 45000, "Likelihood_py": 0.12},
+            {"System": "Safety & Control", "Equipment": "Isolation Valves", "Subcomponent": "Emergency Shutdown (ESD) Valve", "Quantity (100MW)": 8, "Severity_$": 18000, "Likelihood_py": 0.25},
+            {"System": "Safety & Control", "Equipment": "Pressure Relief", "Subcomponent": "Relief Valve / Burst Disc", "Quantity (100MW)": 12, "Severity_$": 12000, "Likelihood_py": 0.35},
+            {"System": "Safety & Control", "Equipment": "Gas Detection", "Subcomponent": "Hydrogen Leak Detector", "Quantity (100MW)": 10, "Severity_$": 8500, "Likelihood_py": 0.42},
+            {"System": "Safety & Control", "Equipment": "Ventilation", "Subcomponent": "Explosion‑Proof Ventilation Fan", "Quantity (100MW)": 4, "Severity_$": 32000, "Likelihood_py": 0.28},
+            {"System": "Safety & Control", "Equipment": "Fire & Gas Detection", "Subcomponent": "Flame / Smoke Detector", "Quantity (100MW)": 8, "Severity_$": 6500, "Likelihood_py": 0.45},
+            {"System": "Safety & Control", "Equipment": "Nitrogen Purge", "Subcomponent": "N₂ Purge Manifold & Cylinders", "Quantity (100MW)": 2, "Severity_$": 22000, "Likelihood_py": 0.18},
+            {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Central PLC / SCADA Cabinet", "Quantity (100MW)": 1, "Severity_$": 485000, "Likelihood_py": 0.05},
+            {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Local Skid PLC Panel", "Quantity (100MW)": 20, "Severity_$": 35000, "Likelihood_py": 0.22},
+            {"System": "Safety & Control", "Equipment": "Instrumentation", "Subcomponent": "Process Transmitters & Analyzers", "Quantity (100MW)": 40, "Severity_$": 15000, "Likelihood_py": 0.30}
         ];
-
-        /* ----- PROCESS-FLOW EDGES (dashed lines) ----- */
-        /* water-side */
-        const processFlows = [
-          // Raw-water treatment ➜ ultrapure feed
-          ["Feed Water Pump",               "Multimedia/Carbon Filter Vessel"],
-          ["Multimedia/Carbon Filter Vessel","RO Membrane Train"],
-          ["RO Membrane Train",             "Mixed-Bed Ion Exchange Module"],
-          ["Mixed-Bed Ion Exchange Module", "Ultrapure Water Tank (≈50 m³)"],
-          ["Ultrapure Water Tank (≈50 m³)", "Centrifugal Feed Pump"],
-
-          /* electrolyzer loop (anode side) */
-          ["Centrifugal Feed Pump",         "PEM Cell Stack Assembly"],
-          ["PEM Cell Stack Assembly",       "Oxygen Gas–Liquid Separator"],
-          ["Oxygen Gas–Liquid Separator",   "Demister"],            // if added
-          ["Demister",                      "Oxygen Vent Manifold Assembly"],
-
-          /* electrolyzer loop (cathode side) */
-          ["PEM Cell Stack Assembly",       "Hydrogen Gas–Liquid Separator"],
-          ["Hydrogen Gas–Liquid Separator", "Gas Cooling Heat Exchanger"],
-          ["Gas Cooling Heat Exchanger",    "Gas–Liquid Knockout Drum"],
-          ["Gas–Liquid Knockout Drum",      "Twin-Tower Hydrogen Dryer"],
-          ["Twin-Tower Hydrogen Dryer",     "Final Particulate Filter"],
-          ["Final Particulate Filter",      "Hydrogen Surge Vessel"],
-
-          /* purification branch */
-          ["Hydrogen Surge Vessel",         "O₂/H₂ Recombiner"],      // catalytic bed
-          ["O₂/H₂ Recombiner",              "Pressure-Swing Adsorption Unit"],
-          ["Pressure-Swing Adsorption Unit","Electric Heater"],
-          ["Electric Heater",               "Chiller"],
-
-          /* cooling circuit */
-          ["Plate Heat Exchanger",          "Coolant Circulation Pump"],
-          ["Coolant Circulation Pump",      "Dry Cooler Module"],
-          ["Dry Cooler Module",             "Coolant Expansion / Degas Tank"],
-
-          /* power supply */
-          ["Step-Down Transformer (HV->MV)", "Switchgear Feeder Panel"],
-          ["Switchgear Feeder Panel",        "5 MW Rectifier Cabinet"],
-          ["5 MW Rectifier Cabinet",         "PEM Cell Stack Assembly"],
-
-          /* safety/control vents */
-          ["Hydrogen Surge Vessel",         "Hydrogen Vent Stack with Flame Arrestor"],
-          ["Oxygen Vent Manifold Assembly", "Oxygen Vent Stack"]
-        ];
-
+        
         // Auto-load demo data on page load
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Page loaded, starting demo data load...');
@@ -635,7 +638,7 @@
         
         function loadDemoData() {
             console.log('Loading demo data...');
-            updateUploadStatus('Loading demo PEM Electrolyzer BOM data...', 'info');
+            updateUploadStatus('Loading demo PEM Electrolyzer BOM data with EML...', 'info');
             
             try {
                 bomDataFromCSV = demoBOMData;
@@ -652,17 +655,17 @@
                 rebuildNetworkFromBOM();
                 console.log('Network rebuilt');
                 
-                updateUploadStatus('✓ Demo BOM loaded: PEM Electrolyzer (100MW) with 40 components', 'success');
+                updateUploadStatus('✓ Demo BOM loaded: PEM Electrolyzer (100MW) with EML data', 'success');
                 
                 const subtitle = document.querySelector('.network-subtitle');
                 if (subtitle) {
-                    subtitle.textContent = 'Explore the interactive demo or upload your own BOM data';
+                    subtitle.textContent = 'EML-based risk analysis with process flow edges';
                 }
                 
                 setTimeout(() => {
                     try {
                         setColorMode('risk');
-                        console.log('Risk mode set');
+                        console.log('EML risk mode set');
                     } catch (colorError) {
                         console.error('Color mode error:', colorError);
                     }
@@ -765,6 +768,11 @@
                 const sub = r["Subcomponent"];
                 const q = parseFloat(r["Quantity (100MW)"]);
                 
+                // Extract severity and likelihood data with fallbacks
+                const sev = parseFloat(r["Severity_$"] || 0);
+                const prob = parseFloat(r["Likelihood_py"] || 0);
+                const eml = sev * prob;
+                
                 if (!s || !e || !sub) return;
                 
                 if (!sys_nodes[s]) {
@@ -780,12 +788,23 @@
                 
                 const subName = q > 1 ? `${sub} (x${Math.floor(q)})` : sub;
                 const subId = `${s}-${e}-${sub}`;
-                const subNode = { id: subId, name: subName, parent: equip_nodes[key], children: [], system: s, equipment: e, quantity: q };
+                const subNode = { 
+                    id: subId, 
+                    name: subName, 
+                    parent: equip_nodes[key], 
+                    children: [], 
+                    system: s, 
+                    equipment: e, 
+                    quantity: q,
+                    severity: sev,
+                    likelihood: prob,
+                    eml: eml
+                };
                 equip_nodes[key].children.push(subNode);
             });
             
             treeStructure = { root, sys_nodes, equip_nodes };
-            updateUploadStatus('Tree structure built successfully', 'success');
+            updateUploadStatus('Tree structure built with EML data', 'success');
         }
         
         function buildNetworkXGraph() {
@@ -808,6 +827,7 @@
             
             const allNodes = levelOrderIter(treeStructure.root);
             
+            // Build tree edges
             allNodes.forEach(n => {
                 if (n.children) {
                     n.children.forEach(child => {
@@ -816,15 +836,11 @@
                 }
                 G_nodes.push(n);
             });
-
-            // add process-flow connections
-            if (Array.isArray(processFlows)) {
-                processFlows.forEach(pair => {
-                    if (pair.length === 2) {
-                        G_edges.push({ from: pair[0], to: pair[1], type: 'process' });
-                    }
-                });
-            }
+            
+            // Add process flow edges
+            processFlows.forEach(([f, t]) => {
+                G_edges.push({ from: f, to: t, type: 'process' });
+            });
             
             const deg_cent = {};
             G_nodes.forEach(node => deg_cent[node.name] = 0);
@@ -868,17 +884,26 @@
             });
             
             const Q_mod = 0.67;
-            const risk = {};
-            G_nodes.forEach(n => {
-                const community = comm_id[n.name] || 0;
-                const C = comms[community] ? comms[community].length : 1;
-                risk[n.name] = meanOverrun(C, Q_mod, 3);
-            });
             
             G_nodes.forEach(node => {
                 node.centrality = deg_cent[node.name] || 0;
                 node.community = comm_id[node.name] || 0;
-                node.risk = risk[node.name] || 0;
+                
+                // Use EML if available, otherwise fallback to old risk calculation
+                node.eml = node.eml || 10000; // default if CSV missing data
+                node.risk = node.eml; // risk == expected monetary loss
+                
+                // Fallback for nodes without severity/likelihood data
+                if (!node.severity) {
+                    node.severity = severity_baseGuess(node);
+                }
+                if (!node.likelihood) {
+                    node.likelihood = 0.05 + node.centrality * 0.2;
+                }
+                if (!node.eml || node.eml === 0) {
+                    node.eml = node.severity * node.likelihood;
+                    node.risk = node.eml;
+                }
             });
             
             return { nodes: G_nodes, edges: G_edges, communities: comms, modularity: Q_mod };
@@ -918,6 +943,9 @@
                     community: node.community,
                     centrality: node.centrality,
                     risk: node.risk,
+                    severity: node.severity || 0,
+                    likelihood: node.likelihood || 0,
+                    eml: node.eml || 0,
                     borderWidth: 2,
                     font: {
                         size: 14,
@@ -932,12 +960,6 @@
                     nameToVisId[node.originalName] = [];
                 }
                 nameToVisId[node.originalName].push(node.id);
-
-                const base = node.originalName.replace(/ \(x\d+\)$/, '');
-                if (!nameToVisId[base]) {
-                    nameToVisId[base] = [];
-                }
-                nameToVisId[base].push(node.id);
             });
             
             const formattedEdges = [];
@@ -946,15 +968,15 @@
             graphData.edges.forEach(edge => {
                 const fromVisIds = nameToVisId[edge.from];
                 const toVisIds = nameToVisId[edge.to];
-
+                
                 if (fromVisIds && toVisIds) {
                     formattedEdges.push({
                         id: edgeIndex++,
                         from: fromVisIds[0],
                         to: toVisIds[0],
-                        color: { color: '#7f8c8d' },
-                        width: edge.type === 'process' ? 1.5 : 2,
-                        dashes: edge.type === 'process'
+                        dashes: edge.type === 'process',
+                        color: { color: edge.type === 'process' ? '#888' : '#999' },
+                        width: edge.type === 'process' ? 1 : 2
                     });
                 }
             });
@@ -975,7 +997,7 @@
             
             updateNetworkStats();
             createCommunityLegend();
-            updateUploadStatus(`✓ Network built: ${formattedNodes.length} nodes, ${formattedEdges.length} edges`, 'success');
+            updateUploadStatus(`✓ Network built: ${formattedNodes.length} nodes, ${formattedEdges.length} edges (${processFlows.length} process flows)`, 'success');
             
             console.log('Network initialization complete');
         }
@@ -1053,14 +1075,42 @@
             }
         }
         
+        // Convert severity to 1-10 scale
+        function getSeverityScore(severity) {
+            // Convert dollar amounts to 1-10 scale (log scale)
+            const logSeverity = Math.log10(severity + 1);
+            // Map 3-7 (roughly $1k to $10M) to 1-10 scale
+            const score = Math.min(10, Math.max(1, Math.round((logSeverity - 3) * 2.5 + 1)));
+            return score;
+        }
+        
+        // Convert EML to 1-10 score (Expected Monetary Loss score)
+        function getEMLScore(eml) {
+            // Convert EML dollar amounts to 1-10 scale (log scale)
+            const logEML = Math.log10(eml + 1);
+            // Map 3-7 (roughly $1k to $10M) to 1-10 scale
+            const score = Math.min(10, Math.max(1, Math.round((logEML - 3) * 2.5 + 1)));
+            return score;
+        }
+        
+        // Convert EML score to overall risk score (1-30 scale)
+        function getOverallRiskScore(eml) {
+            const emlScore = getEMLScore(eml);
+            // Map 1-10 EML score to 1-30 risk score
+            return Math.round(emlScore * 3);
+        }
+
         function showNodePopup(nodeId, position) {
             const nodeData = originalData ? originalData.nodes.find(n => n.id === nodeId) : null;
             if (!nodeData) return;
             
             hideNodePopup();
             
-            const riskLevel = getRiskLevel(nodeData.risk);
-            const riskDescription = getRiskDescription(nodeData.risk, riskLevel);
+            const severityScore = getSeverityScore(nodeData.severity);
+            const emlScore = getEMLScore(nodeData.eml);
+            const centralityScore = (nodeData.centrality * 100).toFixed(1);
+            const overallRiskScore = getOverallRiskScore(nodeData.eml).toFixed(0);
+            const riskLevel = getRiskLevel(nodeData.eml);
             
             const popup = document.createElement('div');
             popup.id = 'nodePopup';
@@ -1097,17 +1147,40 @@
                     
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                         <strong style="color: #64748b; font-size: 0.9rem;">Centrality:</strong> 
-                        <span style="color: #3498db; font-weight: 700; font-size: 1rem;">${(nodeData.centrality || 0).toFixed(3)}</span>
+                        <span style="color: #3498db; font-weight: 700; font-size: 1rem;">${centralityScore}</span>
                     </div>
                     
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <strong style="color: #64748b; font-size: 0.9rem;">Risk Score:</strong> 
-                        <span style="color: ${getRiskBorderColor(nodeData.risk)}; font-weight: 700; font-size: 1rem;">${(nodeData.risk || 0).toFixed(1)}</span>
+                        <strong style="color: #64748b; font-size: 0.9rem;">Severity:</strong> 
+                        <span style="color: #e67e22; font-weight: 700; font-size: 1rem;">${severityScore}/10</span>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <strong style="color: #64748b; font-size: 0.9rem;">EML Score:</strong> 
+                        <span style="color: #9b59b6; font-weight: 700; font-size: 1rem;">${emlScore}/10</span>
+                    </div>
+                </div>
+                
+                <div style="margin: 15px 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <strong style="color: #64748b; font-size: 0.9rem;">Risk Analysis:</strong>
+                        <span style="background: ${riskLevel === 'low' ? '#10b981' : riskLevel === 'medium' ? '#f39c12' : '#e74c3c'}; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">
+                            ${riskLevel}
+                        </span>
+                    </div>
+                    
+                    <div style="background: #e5e7eb; height: 16px; border-radius: 8px; margin: 8px 0; overflow: hidden; position: relative;">
+                        <div style="height: 100%; background: ${getRiskHeatmapColor(nodeData.eml)}; width: ${Math.min(100, (overallRiskScore / 30) * 100)}%; border-radius: 8px; transition: width 0.3s ease;"></div>
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.7rem; font-weight: 600; color: white;">
+                            ${overallRiskScore}/30
+                        </div>
                     </div>
                 </div>
                 
                 <div style="font-size: 0.8rem; color: #64748b;">
-                    ${riskDescription}
+                    ${riskLevel === 'low' ? 'Low complexity component with minimal project impact.' :
+                      riskLevel === 'medium' ? 'Moderate complexity with some system interdependencies.' :
+                      'High complexity component requiring close monitoring.'}
                 </div>
             `;
             
@@ -1123,16 +1196,6 @@
             }
         }
         
-        function getRiskDescription(riskScore, riskLevel) {
-            if (riskLevel === 'low') {
-                return "Low complexity component with minimal project impact.";
-            } else if (riskLevel === 'medium') {
-                return "Moderate complexity with some system interdependencies.";
-            } else {
-                return "High complexity component requiring close monitoring.";
-            }
-        }
-        
         function hideNodePopup() {
             const existingPopup = document.getElementById('nodePopup');
             if (existingPopup) {
@@ -1144,12 +1207,24 @@
             const nodeData = originalData ? originalData.nodes.find(n => n.id === nodeId) : null;
             if (!nodeData) return;
             
-            const riskLevel = getRiskLevel(nodeData.risk);
-            const riskWidth = Math.min(100, (nodeData.risk / 30) * 100);
+            const riskLevel = getRiskLevel(nodeData.eml);
+            const riskWidth = Math.min(100, Math.log10(nodeData.eml + 1) / 6 * 100);
             
             document.getElementById('nodeDetailsContent').innerHTML = `
                 <div class="node-details">
                     <h4>${nodeData.label}</h4>
+                    <div class="detail-row">
+                        <span class="detail-label">Severity ($):</span>
+                        <span class="detail-value">${nodeData.severity.toLocaleString()}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Likelihood (/yr):</span>
+                        <span class="detail-value">${nodeData.likelihood.toFixed(3)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">EML ($):</span>
+                        <span class="detail-value" style="font-weight: 700;">${nodeData.eml.toLocaleString()}</span>
+                    </div>
                     <div class="detail-row">
                         <span class="detail-label">Community:</span>
                         <span class="detail-value">${nodeData.community}</span>
@@ -1159,10 +1234,10 @@
                         <span class="detail-value">${nodeData.centrality.toFixed(3)}</span>
                     </div>
                     <div style="margin: 10px 0;">
-                        <div class="detail-label">Risk Analysis:</div>
+                        <div class="detail-label">EML Risk Level:</div>
                         <div class="risk-meter">
                             <div class="risk-fill risk-${riskLevel}" style="width: ${riskWidth}%">
-                                <div class="risk-text">${nodeData.risk.toFixed(1)}</div>
+                                <div class="risk-text">${(nodeData.eml/1000).toFixed(0)}k</div>
                             </div>
                         </div>
                         <div style="font-size: 0.8em; color: var(--text-secondary);">
@@ -1203,15 +1278,11 @@
                     ...node,
                     color: getNodeColor(node)
                 }));
-
+                
                 if (nodes) {
                     nodes.update(updatedNodes);
                 }
-
-                // Keep originalData in sync so other interactions use the
-                // correct colors after switching modes
-                originalData.nodes = updatedNodes;
-
+                
                 if (mode === 'community') {
                     createCommunityLegend();
                 }
@@ -1220,12 +1291,10 @@
         
         function createRiskLegend() {
             const riskRanges = [
-                { min: 0, max: 5, color: '#10b981', label: 'Very Low Risk (0-5)' },
-                { min: 5, max: 8, color: '#34d399', label: 'Low Risk (5-8)' },
-                { min: 8, max: 12, color: '#fbbf24', label: 'Medium Risk (8-12)' },
-                { min: 12, max: 16, color: '#fb923c', label: 'High Risk (12-16)' },
-                { min: 16, max: 20, color: '#f87171', label: 'Very High Risk (16-20)' },
-                { min: 20, max: 30, color: '#ef4444', label: 'Critical Risk (20+)' }
+                { min: 1, max: 3, color: '#10b981', label: 'Low EML Score 1-3' },
+                { min: 4, max: 5, color: '#fbbf24', label: 'Medium EML Score 4-5' },
+                { min: 6, max: 7, color: '#fb923c', label: 'High EML Score 6-7' },
+                { min: 8, max: 10, color: '#ef4444', label: 'Critical EML Score 8-10' }
             ];
             
             const legendHTML = riskRanges.map(range => `
@@ -1236,8 +1305,11 @@
             `).join('');
             
             document.getElementById('colorLegend').innerHTML = `
-                <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">Risk Heat Map Legend:</div>
+                <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">EML Risk Heat Map:</div>
                 ${legendHTML}
+                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.5rem;">
+                    EML Score = Severity × Likelihood (1-10 scale)
+                </div>
             `;
         }
         
@@ -1250,16 +1322,16 @@
                     communities[node.community] = {
                         color: palette[node.community % palette.length],
                         count: 0,
-                        totalRisk: 0
+                        totalEML: 0
                     };
                 }
                 communities[node.community].count++;
-                communities[node.community].totalRisk += node.risk;
+                communities[node.community].totalEML += node.eml;
             });
             
             const legendHTML = Object.entries(communities).map(([id, data]) => {
-                const avgRisk = data.totalRisk / data.count;
-                const riskLevel = getRiskLevel(avgRisk);
+                const avgEML = data.totalEML / data.count;
+                const riskLevel = getRiskLevel(avgEML);
                 
                 return `
                 <div class="legend-item" onclick="highlightCommunity(${id})">
@@ -1267,7 +1339,7 @@
                     <div>
                         <div><strong>Community ${id}</strong> (${data.count} nodes)</div>
                         <div style="font-size: 0.8em; color: var(--text-secondary);">
-                            Avg Risk: ${avgRisk.toFixed(1)} (${riskLevel})
+                            Avg EML: ${(avgEML/1000).toFixed(0)}k (${riskLevel})
                         </div>
                     </div>
                 </div>
@@ -1297,9 +1369,11 @@
             const riskLevel = getRiskLevel(node.risk);
             return `<div style="padding: 10px; max-width: 200px;">
                 <h4 style="margin: 0 0 10px 0; color: #1E242C;">${node.name}</h4>
+                <p><strong>Severity:</strong> ${node.severity.toLocaleString()}</p>
+                <p><strong>Likelihood:</strong> ${node.likelihood.toFixed(3)}/yr</p>
+                <p><strong>EML:</strong> ${node.eml.toLocaleString()}</p>
                 <p><strong>Community:</strong> ${node.community || 0}</p>
-                <p><strong>Centrality:</strong> ${(node.centrality || 0).toFixed(3)}</p>
-                <p><strong>Risk:</strong> ${(node.risk || 0).toFixed(1)} (${riskLevel})</p>
+                <p><strong>Risk Level:</strong> ${riskLevel}</p>
             </div>`;
         }
         
