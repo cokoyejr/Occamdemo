@@ -579,7 +579,52 @@
             {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Local Skid PLC Panel", "Quantity (100MW)": 20},
             {"System": "Safety & Control", "Equipment": "Instrumentation", "Subcomponent": "Process Transmitters & Analyzers", "Quantity (100MW)": 40}
         ];
-        
+
+        /* ----- PROCESS-FLOW EDGES (dashed lines) ----- */
+        /* water-side */
+        const processFlows = [
+          // Raw-water treatment ➜ ultrapure feed
+          ["Feed Water Pump",               "Multimedia/Carbon Filter Vessel"],
+          ["Multimedia/Carbon Filter Vessel","RO Membrane Train"],
+          ["RO Membrane Train",             "Mixed-Bed Ion Exchange Module"],
+          ["Mixed-Bed Ion Exchange Module", "Ultrapure Water Tank (≈50 m³)"],
+          ["Ultrapure Water Tank (≈50 m³)", "Centrifugal Feed Pump"],
+
+          /* electrolyzer loop (anode side) */
+          ["Centrifugal Feed Pump",         "PEM Cell Stack Assembly"],
+          ["PEM Cell Stack Assembly",       "Oxygen Gas–Liquid Separator"],
+          ["Oxygen Gas–Liquid Separator",   "Demister"],            // if added
+          ["Demister",                      "Oxygen Vent Manifold Assembly"],
+
+          /* electrolyzer loop (cathode side) */
+          ["PEM Cell Stack Assembly",       "Hydrogen Gas–Liquid Separator"],
+          ["Hydrogen Gas–Liquid Separator", "Gas Cooling Heat Exchanger"],
+          ["Gas Cooling Heat Exchanger",    "Gas–Liquid Knockout Drum"],
+          ["Gas–Liquid Knockout Drum",      "Twin-Tower Hydrogen Dryer"],
+          ["Twin-Tower Hydrogen Dryer",     "Final Particulate Filter"],
+          ["Final Particulate Filter",      "Hydrogen Surge Vessel"],
+
+          /* purification branch */
+          ["Hydrogen Surge Vessel",         "O₂/H₂ Recombiner"],      // catalytic bed
+          ["O₂/H₂ Recombiner",              "Pressure-Swing Adsorption Unit"],
+          ["Pressure-Swing Adsorption Unit","Electric Heater"],
+          ["Electric Heater",               "Chiller"],
+
+          /* cooling circuit */
+          ["Plate Heat Exchanger",          "Coolant Circulation Pump"],
+          ["Coolant Circulation Pump",      "Dry Cooler Module"],
+          ["Dry Cooler Module",             "Coolant Expansion / Degas Tank"],
+
+          /* power supply */
+          ["Step-Down Transformer (HV->MV)", "Switchgear Feeder Panel"],
+          ["Switchgear Feeder Panel",        "5 MW Rectifier Cabinet"],
+          ["5 MW Rectifier Cabinet",         "PEM Cell Stack Assembly"],
+
+          /* safety/control vents */
+          ["Hydrogen Surge Vessel",         "Hydrogen Vent Stack with Flame Arrestor"],
+          ["Oxygen Vent Manifold Assembly", "Oxygen Vent Stack"]
+        ];
+
         // Auto-load demo data on page load
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Page loaded, starting demo data load...');
@@ -771,6 +816,15 @@
                 }
                 G_nodes.push(n);
             });
+
+            // add process-flow connections
+            if (Array.isArray(processFlows)) {
+                processFlows.forEach(pair => {
+                    if (pair.length === 2) {
+                        G_edges.push({ from: pair[0], to: pair[1], type: 'process' });
+                    }
+                });
+            }
             
             const deg_cent = {};
             G_nodes.forEach(node => deg_cent[node.name] = 0);
@@ -878,6 +932,12 @@
                     nameToVisId[node.originalName] = [];
                 }
                 nameToVisId[node.originalName].push(node.id);
+
+                const base = node.originalName.replace(/ \(x\d+\)$/, '');
+                if (!nameToVisId[base]) {
+                    nameToVisId[base] = [];
+                }
+                nameToVisId[base].push(node.id);
             });
             
             const formattedEdges = [];
@@ -886,14 +946,15 @@
             graphData.edges.forEach(edge => {
                 const fromVisIds = nameToVisId[edge.from];
                 const toVisIds = nameToVisId[edge.to];
-                
+
                 if (fromVisIds && toVisIds) {
                     formattedEdges.push({
                         id: edgeIndex++,
                         from: fromVisIds[0],
                         to: toVisIds[0],
                         color: { color: '#7f8c8d' },
-                        width: 2
+                        width: edge.type === 'process' ? 1.5 : 2,
+                        dashes: edge.type === 'process'
                     });
                 }
             });
