@@ -1142,11 +1142,15 @@
                     ...node,
                     color: getNodeColor(node)
                 }));
-                
+
                 if (nodes) {
                     nodes.update(updatedNodes);
                 }
-                
+
+                // Keep originalData in sync so other interactions use the
+                // correct colors after switching modes
+                originalData.nodes = updatedNodes;
+
                 if (mode === 'community') {
                     createCommunityLegend();
                 }
