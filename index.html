@@ -343,7 +343,7 @@
                         <i class="fas fa-network-wired"></i>
                         Interactive Network Visualization
                     </h2>
-                    <p class="network-subtitle">EML-based risk analysis with process flow edges</p>
+                    <p class="network-subtitle">EML-based risk analysis with system bridging and process flows</p>
                 </div>
                 
                 <div id="network">
@@ -468,7 +468,8 @@
             // Raw-water treatment → ultrapure feed
             ["Feed Water Pump", "Multimedia/Carbon Filter Vessel"],
             ["Multimedia/Carbon Filter Vessel", "RO Membrane Train"],
-            ["RO Membrane Train", "Mixed-Bed Ion Exchange Module"],
+            ["RO Membrane Train", "Deionised-water polisher (EDI)"],  // Added EDI polisher
+            ["Deionised-water polisher (EDI)", "Mixed-Bed Ion Exchange Module"],
             ["Mixed-Bed Ion Exchange Module", "Ultrapure Water Tank (≈50 m³)"],
             ["Ultrapure Water Tank (≈50 m³)", "Centrifugal Feed Pump"],
             // electrolyzer loop (anode side)
@@ -483,6 +484,7 @@
             ["Gas–Liquid Knockout Drum", "Twin-Tower Hydrogen Dryer"],
             ["Twin-Tower Hydrogen Dryer", "Final Particulate Filter"],
             ["Final Particulate Filter", "Hydrogen Surge Vessel"],
+            ["Hydrogen Surge Vessel", "Product H₂ compressor / storage"],  // Added H2 compressor/storage
             // purification branch
             ["Hydrogen Surge Vessel", "O₂/H₂ Recombiner"],      // catalytic bed
             ["O₂/H₂ Recombiner", "Pressure-Swing Adsorption Unit"],
@@ -492,7 +494,8 @@
             ["Plate Heat Exchanger", "Coolant Circulation Pump"],
             ["Coolant Circulation Pump", "Dry Cooler Module"],
             ["Dry Cooler Module", "Coolant Expansion / Degas Tank"],
-            // power supply
+            // power supply (with HV grid protection)
+            ["HV grid intertie / protection relays", "Step-Down Transformer (HV->MV)"],  // Added HV protection
             ["Step-Down Transformer (HV->MV)", "Switchgear Feeder Panel"],
             ["Switchgear Feeder Panel", "5 MW Rectifier Cabinet"],
             ["5 MW Rectifier Cabinet", "PEM Cell Stack Assembly"],
@@ -513,23 +516,27 @@
         function getNodeColor(node) {
             if (colorMode === 'risk') {
                 return {
-                    background: getRiskHeatmapColor(node.risk),
-                    border: darkenColor(getRiskHeatmapColor(node.risk), 0.3),
+                    background: getRiskHeatmapColor(node.eml),
+                    border: darkenColor(getRiskHeatmapColor(node.eml), 0.3),
                     highlight: {
-                        background: lightenColor(getRiskHeatmapColor(node.risk), 0.2),
-                        border: darkenColor(getRiskHeatmapColor(node.risk), 0.3)
+                        background: lightenColor(getRiskHeatmapColor(node.eml), 0.2),
+                        border: darkenColor(getRiskHeatmapColor(node.eml), 0.3)
                     }
                 };
             } else {
                 return {
                     background: palette[node.community % palette.length],
-                    border: getRiskBorderColor(node.risk),
+                    border: getRiskBorderColor(node.eml),
                     highlight: {
                         background: lightenColor(palette[node.community % palette.length], 0.3),
-                        border: getRiskBorderColor(node.risk)
+                        border: getRiskBorderColor(node.eml)
                     }
                 };
             }
+        }
+        
+        function meanOverrun(C, M, S) {
+            return 5.8 * Math.pow(C, 1.26) * Math.pow(1 - M, 1.18) * Math.pow(S, -1.34);
         }
         
         function darkenColor(color, percent) {
@@ -551,21 +558,6 @@
                 (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 + 
                 (B < 255 ? B < 1 ? 0 : B : 255)).toString(16).slice(1);
         }
-        
-        function meanOverrun(C, M, S) {
-            return 5.8 * Math.pow(C, 1.26) * Math.pow(1 - M, 1.18) * Math.pow(S, -1.34);
-        }
-
-        // Fallback severity estimation based on node properties
-        function severity_baseGuess(node) {
-            // Simple heuristic for demo - in real use, this would be more sophisticated
-            const baseAmount = 50000; // $50k base
-            const quantityMultiplier = (node.quantity || 1) * 1000;
-            const systemMultiplier = node.system === "Power Supply" ? 3 : 
-                                   node.system === "Electrolyzer Module" ? 2.5 : 
-                                   node.system === "Safety & Control" ? 2 : 1;
-            return baseAmount + quantityMultiplier * systemMultiplier;
-        }
 
         function getRiskBorderColor(risk) {
             if (risk < 10000) return '#059669';
@@ -579,15 +571,18 @@
             return 'high';
         }
         
-        // Demo BOM data with severity and likelihood
+        // Demo BOM data with severity and likelihood (updated with missing components)
         const demoBOMData = [
+            {"System": "Water Purification", "Equipment": "Raw Water Pretreatment Unit", "Subcomponent": "Feed Water Pump", "Quantity (100MW)": 2, "Severity_$": 18000, "Likelihood_py": 0.35},
             {"System": "Water Purification", "Equipment": "Raw Water Pretreatment Unit", "Subcomponent": "Multimedia/Carbon Filter Vessel", "Quantity (100MW)": 2, "Severity_$": 27000, "Likelihood_py": 0.33},
             {"System": "Water Purification", "Equipment": "Reverse Osmosis Skid", "Subcomponent": "RO Membrane Train", "Quantity (100MW)": 4, "Severity_$": 45000, "Likelihood_py": 0.25},
+            {"System": "Water Purification", "Equipment": "EDI Polisher", "Subcomponent": "Deionised-water polisher (EDI)", "Quantity (100MW)": 2, "Severity_$": 85000, "Likelihood_py": 0.15},
             {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "Mixed-Bed Ion Exchange Module", "Quantity (100MW)": 2, "Severity_$": 32000, "Likelihood_py": 0.18},
             {"System": "Water Purification", "Equipment": "Polishing Unit", "Subcomponent": "UV Sterilizer Lamp Assembly", "Quantity (100MW)": 4, "Severity_$": 8500, "Likelihood_py": 0.45},
             {"System": "Water Purification", "Equipment": "DI Water Storage", "Subcomponent": "Ultrapure Water Tank (≈50 m³)", "Quantity (100MW)": 1, "Severity_$": 125000, "Likelihood_py": 0.08},
             {"System": "Water Purification", "Equipment": "DI Water Feed Pumps", "Subcomponent": "Centrifugal Feed Pump", "Quantity (100MW)": 2, "Severity_$": 18000, "Likelihood_py": 0.35},
             {"System": "Water Purification", "Equipment": "Instrumentation", "Subcomponent": "Ultrapure Water Flow Meter", "Quantity (100MW)": 4, "Severity_$": 12000, "Likelihood_py": 0.22},
+            {"System": "Water Purification", "Equipment": "Demister", "Subcomponent": "Demister", "Quantity (100MW)": 2, "Severity_$": 15000, "Likelihood_py": 0.25},
             
             {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "PEM Cell Stack Assembly", "Quantity (100MW)": 20, "Severity_$": 5800000, "Likelihood_py": 0.12},
             {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Water Recirculation Pump", "Quantity (100MW)": 40, "Severity_$": 25000, "Likelihood_py": 0.28},
@@ -596,31 +591,37 @@
             {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Internal Manifold & Piping Set", "Quantity (100MW)": 20, "Severity_$": 85000, "Likelihood_py": 0.20},
             {"System": "Electrolyzer Module", "Equipment": "PEM Electrolyzer Skid", "Subcomponent": "Module Instrumentation Package", "Quantity (100MW)": 20, "Severity_$": 45000, "Likelihood_py": 0.25},
             
-            {"System": "Power Supply", "Equipment": "Main Transformer", "Subcomponent": "Step‑Down Transformer (HV‑>MV)", "Quantity (100MW)": 2, "Severity_$": 850000, "Likelihood_py": 0.06},
+            {"System": "Power Supply", "Equipment": "HV Grid Connection", "Subcomponent": "HV grid intertie / protection relays", "Quantity (100MW)": 1, "Severity_$": 450000, "Likelihood_py": 0.08},
+            {"System": "Power Supply", "Equipment": "Main Transformer", "Subcomponent": "Step-Down Transformer (HV->MV)", "Quantity (100MW)": 2, "Severity_$": 850000, "Likelihood_py": 0.06},
             {"System": "Power Supply", "Equipment": "MV Switchgear", "Subcomponent": "Switchgear Feeder Panel", "Quantity (100MW)": 4, "Severity_$": 125000, "Likelihood_py": 0.14},
             {"System": "Power Supply", "Equipment": "Rectifier Unit", "Subcomponent": "5 MW Rectifier Cabinet", "Quantity (100MW)": 20, "Severity_$": 280000, "Likelihood_py": 0.18},
             {"System": "Power Supply", "Equipment": "Harmonic Filter / PFC", "Subcomponent": "Filter Reactor–Capacitor Bank", "Quantity (100MW)": 4, "Severity_$": 95000, "Likelihood_py": 0.22},
             {"System": "Power Supply", "Equipment": "Auxiliary MCC", "Subcomponent": "Motor Control Center Section", "Quantity (100MW)": 2, "Severity_$": 75000, "Likelihood_py": 0.16},
             
-            {"System": "Cooling", "Equipment": "Plate Heat Exchanger", "Subcomponent": "DI Water–Coolant HX", "Quantity (100MW)": 20, "Severity_$": 35000, "Likelihood_py": 0.28},
+            {"System": "Cooling", "Equipment": "Plate Heat Exchanger", "Subcomponent": "Plate Heat Exchanger", "Quantity (100MW)": 20, "Severity_$": 35000, "Likelihood_py": 0.28},
             {"System": "Cooling", "Equipment": "Circulation Pump Set", "Subcomponent": "Coolant Circulation Pump", "Quantity (100MW)": 40, "Severity_$": 22000, "Likelihood_py": 0.32},
-            {"System": "Cooling", "Equipment": "Air‑Cooled Radiator Bank", "Subcomponent": "Dry Cooler Module", "Quantity (100MW)": 10, "Severity_$": 45000, "Likelihood_py": 0.24},
+            {"System": "Cooling", "Equipment": "Air-Cooled Radiator Bank", "Subcomponent": "Dry Cooler Module", "Quantity (100MW)": 10, "Severity_$": 45000, "Likelihood_py": 0.24},
             {"System": "Cooling", "Equipment": "Expansion System", "Subcomponent": "Coolant Expansion / Degas Tank", "Quantity (100MW)": 2, "Severity_$": 28000, "Likelihood_py": 0.19},
             {"System": "Cooling", "Equipment": "Evaporative Cooling Tower (optional)", "Subcomponent": "Cooling Tower Cell", "Quantity (100MW)": 4, "Severity_$": 85000, "Likelihood_py": 0.12},
             
             {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas Cooling Heat Exchanger", "Quantity (100MW)": 2, "Severity_$": 42000, "Likelihood_py": 0.26},
             {"System": "Hydrogen Drying", "Equipment": "Aftercooler Train", "Subcomponent": "Gas–Liquid Knockout Drum", "Quantity (100MW)": 2, "Severity_$": 38000, "Likelihood_py": 0.21},
-            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Twin‑Tower Hydrogen Dryer", "Quantity (100MW)": 2, "Severity_$": 165000, "Likelihood_py": 0.15},
+            {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Twin-Tower Hydrogen Dryer", "Quantity (100MW)": 2, "Severity_$": 165000, "Likelihood_py": 0.15},
             {"System": "Hydrogen Drying", "Equipment": "Desiccant Dryer", "Subcomponent": "Final Particulate Filter", "Quantity (100MW)": 4, "Severity_$": 15000, "Likelihood_py": 0.38},
             {"System": "Hydrogen Drying", "Equipment": "Product Buffer", "Subcomponent": "Hydrogen Surge Vessel", "Quantity (100MW)": 2, "Severity_$": 195000, "Likelihood_py": 0.09},
+            {"System": "Hydrogen Drying", "Equipment": "H2 Compression", "Subcomponent": "Product H₂ compressor / storage", "Quantity (100MW)": 1, "Severity_$": 1200000, "Likelihood_py": 0.10},
             {"System": "Hydrogen Drying", "Equipment": "O₂ Vent System", "Subcomponent": "Oxygen Vent Manifold Assembly", "Quantity (100MW)": 1, "Severity_$": 25000, "Likelihood_py": 0.30},
+            {"System": "Hydrogen Drying", "Equipment": "Purification", "Subcomponent": "O₂/H₂ Recombiner", "Quantity (100MW)": 1, "Severity_$": 75000, "Likelihood_py": 0.18},
+            {"System": "Hydrogen Drying", "Equipment": "Purification", "Subcomponent": "Pressure-Swing Adsorption Unit", "Quantity (100MW)": 1, "Severity_$": 120000, "Likelihood_py": 0.12},
+            {"System": "Hydrogen Drying", "Equipment": "Purification", "Subcomponent": "Electric Heater", "Quantity (100MW)": 2, "Severity_$": 25000, "Likelihood_py": 0.22},
+            {"System": "Hydrogen Drying", "Equipment": "Purification", "Subcomponent": "Chiller", "Quantity (100MW)": 2, "Severity_$": 35000, "Likelihood_py": 0.20},
             
             {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Hydrogen Vent Stack with Flame Arrestor", "Quantity (100MW)": 2, "Severity_$": 85000, "Likelihood_py": 0.08},
             {"System": "Safety & Control", "Equipment": "Vent Stack", "Subcomponent": "Oxygen Vent Stack", "Quantity (100MW)": 2, "Severity_$": 45000, "Likelihood_py": 0.12},
             {"System": "Safety & Control", "Equipment": "Isolation Valves", "Subcomponent": "Emergency Shutdown (ESD) Valve", "Quantity (100MW)": 8, "Severity_$": 18000, "Likelihood_py": 0.25},
             {"System": "Safety & Control", "Equipment": "Pressure Relief", "Subcomponent": "Relief Valve / Burst Disc", "Quantity (100MW)": 12, "Severity_$": 12000, "Likelihood_py": 0.35},
             {"System": "Safety & Control", "Equipment": "Gas Detection", "Subcomponent": "Hydrogen Leak Detector", "Quantity (100MW)": 10, "Severity_$": 8500, "Likelihood_py": 0.42},
-            {"System": "Safety & Control", "Equipment": "Ventilation", "Subcomponent": "Explosion‑Proof Ventilation Fan", "Quantity (100MW)": 4, "Severity_$": 32000, "Likelihood_py": 0.28},
+            {"System": "Safety & Control", "Equipment": "Ventilation", "Subcomponent": "Explosion-Proof Ventilation Fan", "Quantity (100MW)": 4, "Severity_$": 32000, "Likelihood_py": 0.28},
             {"System": "Safety & Control", "Equipment": "Fire & Gas Detection", "Subcomponent": "Flame / Smoke Detector", "Quantity (100MW)": 8, "Severity_$": 6500, "Likelihood_py": 0.45},
             {"System": "Safety & Control", "Equipment": "Nitrogen Purge", "Subcomponent": "N₂ Purge Manifold & Cylinders", "Quantity (100MW)": 2, "Severity_$": 22000, "Likelihood_py": 0.18},
             {"System": "Safety & Control", "Equipment": "Control System", "Subcomponent": "Central PLC / SCADA Cabinet", "Quantity (100MW)": 1, "Severity_$": 485000, "Likelihood_py": 0.05},
@@ -659,7 +660,7 @@
                 
                 const subtitle = document.querySelector('.network-subtitle');
                 if (subtitle) {
-                    subtitle.textContent = 'EML-based risk analysis with process flow edges';
+                    subtitle.textContent = 'EML-based risk analysis with system bridging and process flows';
                 }
                 
                 setTimeout(() => {
@@ -827,9 +828,9 @@
             
             const allNodes = levelOrderIter(treeStructure.root);
             
-            // Build tree edges
+            // Build tree edges (skip root connections to avoid isolated systems)
             allNodes.forEach(n => {
-                if (n.children) {
+                if (n.children && n.id !== "PEM Electrolyzer") { // Skip root connections
                     n.children.forEach(child => {
                         G_edges.push({ from: n.name, to: child.name, type: 'tree' });
                     });
@@ -837,10 +838,55 @@
                 G_nodes.push(n);
             });
             
-            // Add process flow edges
-            processFlows.forEach(([f, t]) => {
-                G_edges.push({ from: f, to: t, type: 'process' });
+            // Build equipment to system mapping for system bridging
+            const equipToSys = {};
+            Object.values(treeStructure.equip_nodes || {}).forEach(e => {
+                equipToSys[e.name] = e.system;
             });
+            
+            // Add process flow edges with system bridging
+            const addedSystemEdges = new Set(); // Prevent duplicate system edges
+            processFlows.forEach(([from, to]) => {
+                // Add the process flow edge
+                G_edges.push({ from: from, to: to, type: 'process' });
+                
+                // Add system bridging edge if crossing system boundaries
+                const sysA = equipToSys[from] || from;
+                const sysB = equipToSys[to] || to;
+                
+                if (sysA !== sysB && sysA && sysB) {
+                    const edgeKey = `${sysA}-${sysB}`;
+                    const reverseKey = `${sysB}-${sysA}`;
+                    
+                    if (!addedSystemEdges.has(edgeKey) && !addedSystemEdges.has(reverseKey)) {
+                        G_edges.push({ from: sysA, to: sysB, type: 'sysflow' });
+                        addedSystemEdges.add(edgeKey);
+                    }
+                }
+            });
+            
+            // Ensure all systems are connected by adding a backbone connection
+            // Connect systems in a logical order to prevent isolation
+            const systemOrder = [
+                "Water Purification",
+                "Power Supply", 
+                "Electrolyzer Module",
+                "Cooling",
+                "Hydrogen Drying",
+                "Safety & Control"
+            ];
+            
+            for (let i = 0; i < systemOrder.length - 1; i++) {
+                const sysA = systemOrder[i];
+                const sysB = systemOrder[i + 1];
+                const edgeKey = `${sysA}-${sysB}`;
+                const reverseKey = `${sysB}-${sysA}`;
+                
+                if (!addedSystemEdges.has(edgeKey) && !addedSystemEdges.has(reverseKey)) {
+                    G_edges.push({ from: sysA, to: sysB, type: 'backbone' });
+                    addedSystemEdges.add(edgeKey);
+                }
+            }
             
             const deg_cent = {};
             G_nodes.forEach(node => deg_cent[node.name] = 0);
@@ -859,9 +905,16 @@
             const comm_id = {};
             let communityIndex = 0;
             
-            comm_id["PEM Electrolyzer"] = 0;
-            comms[0] = ["PEM Electrolyzer"];
+            // Hide/remove the root node from visualization
+            G_nodes.forEach(node => {
+                if (node.id === "PEM Electrolyzer") {
+                    node.hidden = true;
+                    node.community = -1; // Remove from legend logic
+                    return;
+                }
+            });
             
+            // Assign communities (skip root)
             Object.keys(treeStructure.sys_nodes || {}).forEach(sysName => {
                 communityIndex++;
                 comm_id[sysName] = communityIndex;
@@ -889,21 +942,25 @@
                 node.centrality = deg_cent[node.name] || 0;
                 node.community = comm_id[node.name] || 0;
                 
-                // Use EML if available, otherwise fallback to old risk calculation
-                node.eml = node.eml || 10000; // default if CSV missing data
-                node.risk = node.eml; // risk == expected monetary loss
-                
-                // Fallback for nodes without severity/likelihood data
+                // Use EML if available, otherwise calculate from fallbacks
                 if (!node.severity) {
-                    node.severity = severity_baseGuess(node);
+                    // Fallback severity estimation
+                    const baseAmount = 50000; // $50k base
+                    const quantityMultiplier = (node.quantity || 1) * 1000;
+                    const systemMultiplier = node.system === "Power Supply" ? 3 : 
+                                           node.system === "Electrolyzer Module" ? 2.5 : 
+                                           node.system === "Safety & Control" ? 2 : 1;
+                    node.severity = baseAmount + quantityMultiplier * systemMultiplier;
                 }
                 if (!node.likelihood) {
                     node.likelihood = 0.05 + node.centrality * 0.2;
                 }
                 if (!node.eml || node.eml === 0) {
                     node.eml = node.severity * node.likelihood;
-                    node.risk = node.eml;
                 }
+                
+                // Set riskScore for ranking/sorting (1-30 scale)
+                node.riskScore = getOverallRiskScore(node.eml);
             });
             
             return { nodes: G_nodes, edges: G_edges, communities: comms, modularity: Q_mod };
@@ -925,34 +982,36 @@
             }
             
             const nodeNameCount = {};
-            const formattedNodes = graphData.nodes.map(node => {
-                const baseName = node.name;
-                nodeNameCount[baseName] = (nodeNameCount[baseName] || 0) + 1;
-                
-                const uniqueVisId = nodeNameCount[baseName] > 1 ? 
-                    `${node.id}-${nodeNameCount[baseName]}` : node.id;
-                
-                return {
-                    id: uniqueVisId,
-                    label: node.name,
-                    originalName: node.name,
-                    originalId: node.id,
-                    color: getNodeColor(node),
-                    size: 15 + (node.centrality * 30),
-                    title: createBOMTooltip(node),
-                    community: node.community,
-                    centrality: node.centrality,
-                    risk: node.risk,
-                    severity: node.severity || 0,
-                    likelihood: node.likelihood || 0,
-                    eml: node.eml || 0,
-                    borderWidth: 2,
-                    font: {
-                        size: 14,
-                        color: '#2c3e50'
-                    }
-                };
-            });
+            const formattedNodes = graphData.nodes
+                .filter(node => !node.hidden) // Filter out hidden nodes (root)
+                .map(node => {
+                    const baseName = node.name;
+                    nodeNameCount[baseName] = (nodeNameCount[baseName] || 0) + 1;
+                    
+                    const uniqueVisId = nodeNameCount[baseName] > 1 ? 
+                        `${node.id}-${nodeNameCount[baseName]}` : node.id;
+                    
+                    return {
+                        id: uniqueVisId,
+                        label: node.name,
+                        originalName: node.name,
+                        originalId: node.id,
+                        color: getNodeColor(node),
+                        size: 15 + (node.centrality * 30),
+                        title: createBOMTooltip(node),
+                        community: node.community,
+                        centrality: node.centrality,
+                        eml: node.eml || 0,
+                        riskScore: node.riskScore || 0,
+                        severity: node.severity || 0,
+                        likelihood: node.likelihood || 0,
+                        borderWidth: 2,
+                        font: {
+                            size: 14,
+                            color: '#2c3e50'
+                        }
+                    };
+                });
             
             const nameToVisId = {};
             formattedNodes.forEach(node => {
@@ -970,14 +1029,37 @@
                 const toVisIds = nameToVisId[edge.to];
                 
                 if (fromVisIds && toVisIds) {
-                    formattedEdges.push({
-                        id: edgeIndex++,
-                        from: fromVisIds[0],
-                        to: toVisIds[0],
-                        dashes: edge.type === 'process',
-                        color: { color: edge.type === 'process' ? '#888' : '#999' },
-                        width: edge.type === 'process' ? 1 : 2
-                    });
+                    if (edge.type === 'process') {
+                        // Enhanced process flow edges with arrows and dashes
+                        formattedEdges.push({
+                            id: edgeIndex++,
+                            from: fromVisIds[0],
+                            to: toVisIds[0],
+                            dashes: [5, 5],
+                            color: { color: '#666', opacity: 0.8 },
+                            width: 1.5,
+                            arrows: 'to'
+                        });
+                    } else if (edge.type === 'sysflow' || edge.type === 'backbone') {
+                        // System bridging edges - thick blue lines (both sysflow and backbone)
+                        formattedEdges.push({
+                            id: edgeIndex++,
+                            from: fromVisIds[0],
+                            to: toVisIds[0],
+                            color: { color: edge.type === 'backbone' ? '#2c3e50' : '#1f78b4' },
+                            width: edge.type === 'backbone' ? 2 : 3,
+                            smooth: { type: 'continuous', roundness: 0.3 }
+                        });
+                    } else {
+                        // Regular tree edges
+                        formattedEdges.push({
+                            id: edgeIndex++,
+                            from: fromVisIds[0],
+                            to: toVisIds[0],
+                            color: { color: '#bbb' },
+                            width: 1
+                        });
+                    }
                 }
             });
             
@@ -997,10 +1079,11 @@
             
             updateNetworkStats();
             createCommunityLegend();
-            updateUploadStatus(`✓ Network built: ${formattedNodes.length} nodes, ${formattedEdges.length} edges (${processFlows.length} process flows)`, 'success');
+            updateUploadStatus(`✓ Network built: ${formattedNodes.length} nodes, ${formattedEdges.length} edges (with system bridges)`, 'success');
             
             console.log('Network initialization complete');
         }
+        
         
         function initializeNetworkWithData(nodeData, edgeData) {
             nodes = new vis.DataSet(nodeData);
@@ -1318,15 +1401,17 @@
             
             const communities = {};
             originalData.nodes.forEach(node => {
-                if (!communities[node.community]) {
-                    communities[node.community] = {
-                        color: palette[node.community % palette.length],
-                        count: 0,
-                        totalEML: 0
-                    };
+                if (node.community >= 0) { // Skip hidden nodes with community -1
+                    if (!communities[node.community]) {
+                        communities[node.community] = {
+                            color: palette[node.community % palette.length],
+                            count: 0,
+                            totalEML: 0
+                        };
+                    }
+                    communities[node.community].count++;
+                    communities[node.community].totalEML += node.eml;
                 }
-                communities[node.community].count++;
-                communities[node.community].totalEML += node.eml;
             });
             
             const legendHTML = Object.entries(communities).map(([id, data]) => {
@@ -1366,7 +1451,7 @@
         }
         
         function createBOMTooltip(node) {
-            const riskLevel = getRiskLevel(node.risk);
+            const riskLevel = getRiskLevel(node.eml);
             return `<div style="padding: 10px; max-width: 200px;">
                 <h4 style="margin: 0 0 10px 0; color: #1E242C;">${node.name}</h4>
                 <p><strong>Severity:</strong> ${node.severity.toLocaleString()}</p>
@@ -1389,7 +1474,7 @@
                 document.getElementById('nodeCount').textContent = originalData.nodes.length;
                 document.getElementById('edgeCount').textContent = originalData.edges.length;
                 
-                const communities = new Set(originalData.nodes.map(n => n.community));
+                const communities = new Set(originalData.nodes.filter(n => n.community >= 0).map(n => n.community));
                 document.getElementById('communityCount').textContent = communities.size;
                 document.getElementById('modularityQ').textContent = '0.67';
             }
